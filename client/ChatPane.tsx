@@ -1,6 +1,6 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon } from "@getpaseo/plugin/client/react-native";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View, type LayoutRectangle } from "react-native";
 import type { toWire } from "../shared/attachments";
 import type { Bot } from "../shared/bot";
@@ -37,6 +37,8 @@ export interface ChatPaneProps {
   onStart(message: OutgoingMessage): Promise<void>;
   /** Shows another chat of this bot (a routine run's own chat). */
   onOpenChat(chatId: string): void;
+  onOpenInPaseo?(): void;
+  composerHeader?: ReactNode;
 }
 
 export interface OutgoingMessage {
@@ -46,18 +48,19 @@ export interface OutgoingMessage {
   attachments: ReturnType<typeof toWire>["attachments"];
 }
 
-export function ChatPane({ colors, bot, host, chat, chatId, panelOpen, layout, keyboardOpen, typeVersion, onBack, onBotMenu, onTogglePanel, onStart, onOpenChat }: ChatPaneProps) {
+export function ChatPane({ colors, bot, host, chat, chatId, panelOpen, layout, keyboardOpen, typeVersion, onBack, onBotMenu, onTogglePanel, onStart, onOpenChat, onOpenInPaseo, composerHeader }: ChatPaneProps) {
   const running = chat.agent?.status === "running" || chat.agent?.status === "initializing";
   const empty = chat.entries.length === 0 && !chat.loading && !chat.error && (chat.agent?.pendingPermissions.length ?? 0) === 0;
   const title = chatId ? displayTitle(chat.agent?.title) : "New chat";
   const canFind = chatId !== null && !empty;
   const [findOpen, setFindOpen] = useState(false);
+  const [scrollRequest, setScrollRequest] = useState(0);
   useEffect(() => setFindOpen(false), [chatId]);
   // ⌘F / Ctrl+F finds in the open chat on the desktop.
   useEffect(() => (canFind ? listenForFind(() => setFindOpen(true)) : undefined), [canFind]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.surface0 }}>
+    <View style={{ flex: 1, minHeight: 0, backgroundColor: colors.surface0 }}>
       <Header
         colors={colors}
         title={title}
@@ -69,6 +72,7 @@ export function ChatPane({ colors, bot, host, chat, chatId, panelOpen, layout, k
         onMenu={onBotMenu}
         onTogglePanel={onTogglePanel}
         onFind={canFind ? () => setFindOpen((open) => !open) : undefined}
+        onOpenInPaseo={onOpenInPaseo}
       />
       {chatId === null || empty ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 }}>
@@ -79,9 +83,10 @@ export function ChatPane({ colors, bot, host, chat, chatId, panelOpen, layout, k
           ) : null}
         </View>
       ) : (
-        <ChatStream key={chatId} colors={colors} chat={chat} api={host.api} agentId={chatId} compact={layout.compact} platform={layout.platform} typeVersion={typeVersion} onOpenChat={onOpenChat} voice={bot.voice} findOpen={findOpen} onCloseFind={() => setFindOpen(false)} {...(host.isLocal ? { botId: bot.id } : {})} />
+        <ChatStream key={chatId} colors={colors} chat={chat} api={host.api} agentId={chatId} compact={layout.compact} platform={layout.platform} typeVersion={typeVersion} onOpenChat={onOpenChat} voice={bot.voice} findOpen={findOpen} onCloseFind={() => setFindOpen(false)} scrollRequest={scrollRequest} {...(host.isLocal ? { botId: bot.id } : {})} />
       )}
-      <Composer colors={colors} bot={bot} host={host} agentId={chatId} agent={chat.agent} running={running} layout={layout} keyboardOpen={keyboardOpen} onStart={onStart} />
+      {composerHeader}
+      <Composer colors={colors} bot={bot} host={host} agentId={chatId} agent={chat.agent} running={running} layout={layout} keyboardOpen={keyboardOpen} onStart={onStart} onSend={() => setScrollRequest((request) => request + 1)} />
     </View>
   );
 }
@@ -101,13 +106,14 @@ interface HeaderProps {
   onTogglePanel(): void;
   /** Opens or closes find in chat; absent while there's nothing to find. */
   onFind?: () => void;
+  onOpenInPaseo?(): void;
 }
 
 // Paseo's workspace header (components/headers/screen-header.tsx, workspace-screen.tsx):
 // 36 high on desktop with the title (weight 300) and project name inline; 56 on phones
 // with the title (weight 400) over a 12pt subtitle row. Icon buttons are 26 (desktop) or
 // 32 (phones) with 16pt glyphs; the back arrow is Paseo's BackHeader (ArrowLeft 20, 44pt box).
-function Header({ colors, title, subtitle, hostBadge, compact, panelOpen, onBack, onMenu, onTogglePanel, onFind }: HeaderProps) {
+function Header({ colors, title, subtitle, hostBadge, compact, panelOpen, onBack, onMenu, onTogglePanel, onFind, onOpenInPaseo }: HeaderProps) {
   const tokens = nativeTokens(colors);
   const menuButton = useRef<View>(null);
   const openMenu = () => void measureAnchor(menuButton).then(onMenu);
@@ -159,6 +165,7 @@ function Header({ colors, title, subtitle, hostBadge, compact, panelOpen, onBack
           <HeaderButton colors={colors} compact icon="Ellipsis" label="Bot actions" onPress={openMenu} />
         </View>
       ) : null}
+      {onOpenInPaseo ? <HeaderButton colors={colors} compact={compact} icon="ExternalLink" label="Open conversation in workspace" onPress={onOpenInPaseo} /> : null}
       {onFind ? <HeaderButton colors={colors} compact={compact} icon="Search" label="Find in chat" onPress={onFind} /> : null}
       {/* On desktop the open panel owns its close button, so the toggle hides (workspace-explorer-toggle.tsx). */}
       {compact || !panelOpen ? (

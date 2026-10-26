@@ -25,6 +25,12 @@ export const helloRpc = defineRpc({
   output: z.object({ scheduler: z.boolean() }),
 });
 
+export const stopChatRpc = defineRpc({
+  name: "bots.chat.stop",
+  input: z.object({ botId: BotId, agentId: z.string().uuid() }),
+  output: z.object({ ok: z.boolean() }),
+});
+
 const PromptSectionSchema = z.object({ title: z.string(), text: z.string() });
 
 /** The bot's system prompt as it would be sent now, with its memory and skills; `message` (a new chat's first) picks its playbooks. */

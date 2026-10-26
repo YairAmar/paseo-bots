@@ -57,6 +57,7 @@ function schedulePersist(): void {
 
 // Queued messages live for the session, per chat, like Paseo's session-store queue.
 const queues = new Map<string, QueuedMessage[]>();
+const pausedQueues = new Set<string>();
 const listeners = new Set<() => void>();
 const EMPTY: QueuedMessage[] = [];
 
@@ -100,4 +101,19 @@ export function useQueue(key: string): QueuedMessage[] {
     () => readQueue(key),
     () => readQueue(key),
   );
+}
+
+export function isQueuePaused(key: string): boolean {
+  return pausedQueues.has(key);
+}
+
+export function setQueuePaused(key: string, paused: boolean): void {
+  if (paused === pausedQueues.has(key)) return;
+  if (paused) pausedQueues.add(key);
+  else pausedQueues.delete(key);
+  emit();
+}
+
+export function useQueuePaused(key: string): boolean {
+  return useSyncExternalStore(subscribe, () => isQueuePaused(key), () => isQueuePaused(key));
 }

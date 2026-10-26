@@ -13,6 +13,7 @@ import { generateAvatar, imageStatus, removeImageKey, setImageKey } from "./serv
 import { mcpSources } from "./server/mcp-sources";
 import { accounts, appTools, catalog, connect, disconnect, removeKey, renameAccount, setKey, status as appsStatus } from "./server/composio";
 import { BotsHost } from "./server/host";
+import { stopBotChat } from "./server/chat-control";
 import { Relay } from "./server/relay";
 import { acceptProposal, dismissProposal, getProposal } from "./server/proposals";
 import { BOT_TOOLS } from "./server/tools";
@@ -64,6 +65,7 @@ import {
   skillReadRpc,
   skillWriteRpc,
   systemPromptRpc,
+  stopChatRpc,
   uploadRpc,
 } from "./shared/rpc";
 
@@ -95,6 +97,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(helloRpc, (_input, context) => {
     attach(context);
     return { scheduler: scheduler.running };
+  });
+  server.handle(stopChatRpc, (input, context) => {
+    attach(context);
+    return stopBotChat(host, input);
   });
   server.handle(ensureBotHomeRpc, (input, context) => {
     attach(context);

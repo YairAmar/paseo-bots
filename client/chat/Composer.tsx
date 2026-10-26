@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } 
 import { ActivityIndicator, Platform, Pressable, Text, View, useWindowDimensions, type TextInput as NativeTextInput } from "react-native";
 import { newAttachmentId, normalizeMimeType, preflightFile, toWire, type ComposerAttachment } from "../../shared/attachments";
 import type { Bot } from "../../shared/bot";
-import { uploadRpc } from "../../shared/rpc";
+import { stopChatRpc, uploadRpc } from "../../shared/rpc";
 import { expandLearn, LEARN_COMMAND } from "../../shared/skills";
 import { AttachmentPill, PendingAttachmentPill } from "../AttachmentPill";
 import type { BotHost } from "../data";
@@ -20,7 +20,7 @@ import { content, ui } from "../typography";
 import type { ChatPaneProps, OutgoingMessage } from "../ChatPane";
 import { CommandMenu } from "./composer/CommandMenu";
 import { ContextMeter } from "./composer/ContextMeter";
-import { getDraft, loadDrafts, queueMessage, requeueFront, setDraft, takeQueuedMessage, useQueue } from "./composer/drafts";
+import { getDraft, isQueuePaused, loadDrafts, queueMessage, requeueFront, setDraft, setQueuePaused, takeQueuedMessage, useQueue, useQueuePaused } from "./composer/drafts";
 import { useInputHeight } from "./composer/height";
 import {
   activeTurnBehaviorFor,
@@ -54,8 +54,6 @@ type Colors = PluginTheme["colors"];
 type Permission = PaseoAgent["pendingPermissions"][number];
 
 const web = Platform.OS === "web";
-/** Paseo's palette: red-600 for the stop button, red-500 for inline send errors. */
-const RED_600 = "#dc2626";
 const RED_500 = "#ef4444";
 const FAILED_TO_SEND = "Failed to send message";
 
@@ -67,6 +65,8 @@ interface ComposerProps {
   running: boolean;
   layout: ChatPaneProps["layout"];
   keyboardOpen: boolean;
+  draftScope?: string;
+  onSend?(): void;
   /** The chat's live agent snapshot: pending permissions (stop), last usage (context meter). */
   agent?: PaseoAgent | null;
   onStart(message: OutgoingMessage): Promise<void>;
@@ -74,7 +74,7 @@ interface ComposerProps {
 
 /** One composer per chat, so each chat keeps its own draft, height and queue. */
 export function Composer(props: ComposerProps) {
-  const draftKey = composerDraftKey(props.host.key, props.bot.id, props.agentId);
+  const draftKey = composerDraftKey(props.host.key, props.bot.id, props.agentId) + (props.draftScope ? `:${props.draftScope}` : "");
   return <ChatComposer key={draftKey} draftKey={draftKey} {...props} />;
 }
 
@@ -87,10 +87,11 @@ const commandCache = new Map<string, Promise<{ commands: SlashCommand[]; error: 
 // send error above a surface1 card with a borderAccent frame, radius 16; attachment tray,
 // auto-growing input, then a toolbar with "Add attachment" on the left and the context
 // meter and send/stop button on the right.
-function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpen, agent, onStart, draftKey }: ComposerProps & { draftKey: string }) {
+function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpen, agent, onStart, draftKey, onSend }: ComposerProps & { draftKey: string }) {
   const toast = useToast();
   const menu = useMenu();
   const upload = useRpc(uploadRpc);
+  const stopChat = useRpc(stopChatRpc);
   const tokens = nativeTokens(colors);
   const { height: windowHeight } = useWindowDimensions();
   const initial = useMemo(() => getDraft(draftKey), [draftKey]);
@@ -118,12 +119,13 @@ function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpe
   const permissions: Permission[] = agent?.pendingPermissions ?? [];
   const behavior = resolveActiveSendBehavior(sendBehavior, permissions.length > 0);
   const queue = useQueue(draftKey);
+  const queuePaused = useQueuePaused(draftKey);
   const canQueue = agentId !== null;
   const desktopWeb = layout.platform === "web" && !layout.compact;
   const buttonIconSize = web ? 16 : 20;
   const hasContent = text.trim().length > 0 || attachments.length > 0;
   const loading = processing || pending.length > 0;
-  const canInterrupt = running && permissions.length > 0 && agentId !== null && !!host.api;
+  const canInterrupt = (running || permissions.length > 0) && (host.isLocal || permissions.length > 0) && agentId !== null && !!host.api;
   const canPressLoading = loading && canInterrupt;
   const sendDisabled = !host.api || (!canPressLoading && loading);
   const primary = resolvePrimaryAction({ hasContent, running, loading });
@@ -285,6 +287,8 @@ function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpe
   const send = async () => {
     const message = { text: text.trim(), attachments };
     if ((!message.text && message.attachments.length === 0) || !host.api) return;
+    setQueuePaused(draftKey, false);
+    onSend?.();
     updateText("");
     updateAttachments(() => []);
     setSendError(null);
@@ -335,8 +339,8 @@ function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpe
   }, [drain]);
   const draining = useRef(false);
   useEffect(() => {
-    const inFlight = draining.current || drain !== "idle" || processing;
-    if (!shouldDrainQueue({ running, queued: queue.length, inFlight, hasAgent: agentId !== null && !!host.api })) return;
+    const inFlight = isQueuePaused(draftKey) || draining.current || drain !== "idle" || processing;
+    if (!shouldDrainQueue({ running: running || !!agent?.activeTurn || permissions.length > 0, queued: queue.length, inFlight, hasAgent: agentId !== null && agent?.id === agentId && !!host.api })) return;
     const next = takeQueuedMessage(draftKey, queue[0]!.id);
     if (!next) return;
     draining.current = true;
@@ -352,10 +356,12 @@ function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpe
       .finally(() => {
         draining.current = false;
       });
-  }, [running, queue, drain, processing, agentId, host.api]);
+  }, [running, queue, queuePaused, drain, processing, agentId, agent, host.api]);
 
   const sendQueuedNow = async (item: QueuedMessage) => {
     if (!host.api || !takeQueuedMessage(draftKey, item.id)) return;
+    setQueuePaused(draftKey, false);
+    setDrain("awaiting");
     setSendError(null);
     try {
       await deliver(item);
@@ -374,20 +380,21 @@ function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpe
 
   // ------------------------------------------------------------ stop
 
-  // Plugins have no cancel API. The one interrupt path is a pending permission: denying it
-  // with `interrupt` ends the turn, which is what Paseo's stop does in that state.
   const stop = async () => {
     const permission = permissions[0];
-    if (!canInterrupt || !permission || !agentId || !host.api || stopping) return;
+    if (!canInterrupt || !agentId || !host.api || stopping) return;
     setStopping(true);
+    setQueuePaused(draftKey, true);
+    setDrain("paused");
     try {
-      await host.api.agents.ref(agentId).respondToPermission({ requestId: permission.id, response: { behavior: "deny", interrupt: true, message: "Interrupted by the user." } });
+      if (host.isLocal) await stopChat({ botId: bot.id, agentId });
+      else if (permission) await host.api.agents.ref(agentId).respondToPermission({ requestId: permission.id, response: { behavior: "deny", interrupt: true, message: "Interrupted by the user." } });
     } catch (error) {
       toast.error(errorText(error));
     } finally {
       if (mounted.current) setStopping(false);
     }
-    focusInput();
+    if (desktopWeb && mounted.current) focusInput();
   };
 
   // ------------------------------------------------------------ /commands
@@ -546,6 +553,11 @@ function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpe
                     />
                   </View>
                 ) : null}
+                {canInterrupt ? (
+                  <RoundButton label={stopping ? "Canceling agent" : "Stop agent"} background={colors.statusDanger} disabled={stopping} onPress={() => void stop()}>
+                    {stopping ? <ActivityIndicator size="small" color={colors.accentForeground} /> : <FilledSquare size={buttonIconSize} />}
+                  </RoundButton>
+                ) : null}
                 {primary === "send" ? (
                   <RoundButton
                     label={submitAccessibilityLabel({ canPressLoading, behavior, running })}
@@ -554,10 +566,6 @@ function ChatComposer({ colors, bot, host, agentId, running, layout, keyboardOpe
                     onPress={canPressLoading ? () => void stop() : defaultAction}
                   >
                     {loading ? <ActivityIndicator size="small" color={colors.accentForeground} /> : <Icon name="ArrowUp" size={buttonIconSize} color={colors.accentForeground} />}
-                  </RoundButton>
-                ) : primary === "active" && canInterrupt ? (
-                  <RoundButton label={stopping ? "Canceling agent" : "Stop agent"} background={RED_600} disabled={stopping} onPress={() => void stop()}>
-                    {stopping ? <ActivityIndicator size="small" color="#ffffff" /> : <FilledSquare size={buttonIconSize} />}
                   </RoundButton>
                 ) : null}
               </View>

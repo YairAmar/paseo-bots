@@ -28,6 +28,8 @@ import { buildRows, findRows, layoutStream, retainLayout, type StreamEntry, type
 import { CompletedTurnFooter, RowContent, RowFrame, WorkingIndicator, type RowContext } from "./stream/rows";
 import { SecondaryButton } from "./stream/ui";
 import { tooltip } from "../ui/Tooltip";
+import { domNode, listenForScrollAway } from "../web";
+import { ScrollFollow } from "./stream/scroll";
 
 type Colors = PluginTheme["colors"];
 
@@ -58,6 +60,7 @@ export interface ChatStreamProps {
   /** Whether the find bar is open. */
   findOpen?: boolean;
   onCloseFind?(): void;
+  scrollRequest?: number;
 }
 
 /** Whether a turn is running, as the stream shows it. */
@@ -65,10 +68,12 @@ function isTurnRunning(chat: ChatState): boolean {
   return chat.agent?.status === "running" || chat.agent?.status === "initializing";
 }
 
-export function ChatStream({ colors, chat, api, agentId, compact, platform, typeVersion, onOpenChat, botId, voice, findOpen = false, onCloseFind }: ChatStreamProps) {
+export function ChatStream({ colors, chat, api, agentId, compact, platform, typeVersion, onOpenChat, botId, voice, findOpen = false, onCloseFind, scrollRequest = 0 }: ChatStreamProps) {
   const running = isTurnRunning(chat);
   const inverted = platform !== "web";
   const list = useRef<NativeFlatList<StreamLayoutItem>>(null);
+  const container = useRef<View>(null);
+  const follow = useRef(new ScrollFollow());
   const previousLayout = useRef<StreamLayout | null>(null);
   const layout = useMemo(() => {
     const next = retainLayout(previousLayout.current, layoutStream(buildRows(chat.entries as unknown as StreamEntry[], running), running));
@@ -85,19 +90,25 @@ export function ChatStream({ colors, chat, api, agentId, compact, platform, type
   const nearBottomRef = useRef(true);
   const metrics = useRef({ offset: 0, content: 0, viewport: 0 });
   /** Set while an older page loads on web, so content added above doesn't move the reader. */
-  const olderAnchor = useRef(false);
-  const lastKey = useRef<string | null>(null);
+  const olderAnchor = useRef<string | null>(null);
 
   const updateNearBottom = (value: boolean) => {
     nearBottomRef.current = value;
     setNearBottom((current) => (current === value ? current : value));
   };
+  const pauseFollowing = useCallback(() => {
+    follow.current.pause();
+    nearBottomRef.current = false;
+    setNearBottom(false);
+  }, []);
+  useEffect(() => listenForScrollAway(domNode(container.current), pauseFollowing), [pauseFollowing]);
 
   const scrollToBottom = useCallback(
     (animated: boolean) => {
+      follow.current.resume();
       updateNearBottom(true);
       if (inverted) list.current?.scrollToOffset({ offset: 0, animated });
-      else list.current?.scrollToEnd({ animated });
+      else list.current?.scrollToEnd({ animated: false });
     },
     [inverted],
   );
@@ -106,7 +117,7 @@ export function ChatStream({ colors, chat, api, agentId, compact, platform, type
     const { offset, content, viewport } = metrics.current;
     const fromStart = inverted ? content - viewport - offset : offset;
     if (fromStart > HISTORY_START_THRESHOLD || !chat.hasOlder || chat.loadingOlder || content <= 0) return;
-    if (!inverted) olderAnchor.current = true;
+    if (!inverted) olderAnchor.current = layout.items[0]?.row.key ?? null;
     chat.loadOlder();
   };
 
@@ -114,7 +125,7 @@ export function ChatStream({ colors, chat, api, agentId, compact, platform, type
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     metrics.current = { offset: contentOffset.y, content: contentSize.height, viewport: layoutMeasurement.height };
     const distance = inverted ? contentOffset.y : contentSize.height - (contentOffset.y + layoutMeasurement.height);
-    updateNearBottom(distance <= (inverted ? NATIVE_NEAR_BOTTOM : WEB_NEAR_BOTTOM));
+    updateNearBottom(follow.current.observe(distance, inverted ? NATIVE_NEAR_BOTTOM : WEB_NEAR_BOTTOM));
     maybeLoadOlder();
   };
 
@@ -124,7 +135,9 @@ export function ChatStream({ colors, chat, api, agentId, compact, platform, type
     // A short page that doesn't fill the viewport never scrolls, so check the history start here too.
     if (inverted || height <= metrics.current.viewport + HISTORY_START_THRESHOLD) maybeLoadOlder();
     if (inverted) return;
-    if (olderAnchor.current && !nearBottomRef.current) {
+    if (olderAnchor.current !== null && !nearBottomRef.current) {
+      if (layout.items[0]?.row.key === olderAnchor.current) return;
+      olderAnchor.current = null;
       // Older history (and its spinner) went in above: keep the reader where they were.
       const delta = height - previous;
       if (delta !== 0 && previous > 0) {
@@ -145,18 +158,14 @@ export function ChatStream({ colors, chat, api, agentId, compact, platform, type
   useEffect(() => {
     if (!chat.loadingOlder) {
       // A page that added nothing above (all duplicates) leaves no anchor to apply.
-      const timer = setTimeout(() => (olderAnchor.current = false), 500);
+      const timer = setTimeout(() => (olderAnchor.current = null), 500);
       return () => clearTimeout(timer);
     }
   }, [chat.loadingOlder]);
 
-  // Sending a message jumps back to the bottom, like Paseo's bottom anchor on submit.
   useEffect(() => {
-    const last = layout.items[layout.items.length - 1]?.row;
-    const key = last?.key ?? null;
-    if (key && key !== lastKey.current && last?.kind === "user" && lastKey.current !== null) scrollToBottom(false);
-    lastKey.current = key;
-  }, [layout.items, scrollToBottom]);
+    if (scrollRequest > 0) scrollToBottom(false);
+  }, [scrollRequest, scrollToBottom]);
 
   // ---------------------------------------------------------------- find
 
@@ -172,6 +181,7 @@ export function ChatStream({ colors, chat, api, agentId, compact, platform, type
   const reveal = (itemIndex: number) => {
     const item = layout.items[itemIndex];
     if (!item) return;
+    pauseFollowing();
     setFound(item.row.key);
     // A first jump near the row; on the web the row then centres itself once it renders.
     list.current?.scrollToIndex({ index: inverted ? layout.items.length - 1 - itemIndex : itemIndex, animated: inverted, viewPosition: 0.3 });
@@ -271,7 +281,7 @@ export function ChatStream({ colors, chat, api, agentId, compact, platform, type
   ) : null;
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.surface0 }}>
+    <View ref={container} collapsable={false} onTouchStart={pauseFollowing} style={{ flex: 1, minHeight: 0, backgroundColor: colors.surface0 }}>
       {findOpen ? (
         <FindBar
           colors={colors}
@@ -294,13 +304,14 @@ export function ChatStream({ colors, chat, api, agentId, compact, platform, type
         renderItem={renderItem}
         ListHeaderComponent={inverted ? auxiliary : olderSpinner}
         ListFooterComponent={inverted ? olderSpinner : auxiliary}
-        style={{ flex: 1 }}
+        style={{ flex: 1, minHeight: 0 }}
         contentContainerStyle={{ flexGrow: 1, paddingHorizontal: compact ? 12 : 16, ...(inverted ? { paddingVertical: 0 } : { paddingTop: 16, paddingBottom: 16 }) }}
         onScroll={onScroll}
+        onScrollBeginDrag={pauseFollowing}
         scrollEventThrottle={16}
         onContentSizeChange={onContentSizeChange}
         onLayout={onLayout}
-        maintainVisibleContentPosition={platform === "ios" ? { minIndexForVisible: 0, autoscrollToTopThreshold: 0 } : undefined}
+        maintainVisibleContentPosition={platform === "ios" ? { minIndexForVisible: 0, ...(nearBottom ? { autoscrollToTopThreshold: 0 } : {}) } : undefined}
         initialNumToRender={12}
         windowSize={10}
         removeClippedSubviews={false}

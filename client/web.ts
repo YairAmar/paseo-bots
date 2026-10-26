@@ -49,6 +49,8 @@ interface DomEvent {
   stopPropagation(): void;
   clipboardData?: DataTransferLike | null;
   dataTransfer?: DataTransferLike | null;
+  deltaY?: number;
+  key?: string;
 }
 /** A DOM element as far as this module is concerned. */
 export interface DomElement {
@@ -409,6 +411,20 @@ export function observeWidth(element: DomElement | null, onChange: () => void): 
   });
   observer.observe(element);
   return () => observer.disconnect();
+}
+
+export function listenForScrollAway(element: DomElement | null, onAway: () => void): () => void {
+  if (!web || !element) return () => {};
+  const wheel = (event: DomEvent) => { if ((event.deltaY ?? 0) < 0) onAway(); };
+  const key = (event: DomEvent) => { if (["ArrowUp", "PageUp", "Home"].includes(event.key ?? "")) onAway(); };
+  element.addEventListener("wheel", wheel);
+  element.addEventListener("keydown", key);
+  element.addEventListener("pointerdown", onAway);
+  return () => {
+    element.removeEventListener("wheel", wheel);
+    element.removeEventListener("keydown", key);
+    element.removeEventListener("pointerdown", onAway);
+  };
 }
 
 // ---------------------------------------------------------------- focus

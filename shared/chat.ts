@@ -29,6 +29,7 @@ interface ChatWorkspace {
   projectRootPath: string;
   workspaceDirectory?: string;
   title?: string | null;
+  archivedAt?: string | null;
 }
 
 interface WorkspaceHandle {
@@ -116,6 +117,7 @@ export interface StartChatInput {
   /** The plugin's servers for this chat (tools, connected apps), from the relay on the bot's host. */
   plugin?: PluginServers;
   placement: BotPlacement;
+  workspaceId?: string;
   prompt: string;
   systemPrompt: string;
   /** Defaults to Paseo's own title derived from the prompt. */
@@ -133,7 +135,14 @@ export interface StartChatInput {
 export async function startBotChat(api: ChatApi, input: StartChatInput): Promise<string> {
   const { bot } = input;
   const model = bot.model ?? (await resolveDefaultModel(api, bot.provider));
-  const workspace = await ensureBotWorkspace(api, bot, input.placement);
+  let workspace: WorkspaceHandle;
+  if (input.workspaceId) {
+    workspace = api.workspaces.ref(input.workspaceId);
+    const snapshot = await workspace.refresh();
+    if (!snapshot || snapshot.archivedAt) throw new Error("The selected workspace is no longer available. Choose another workspace.");
+  } else {
+    workspace = await ensureBotWorkspace(api, bot, input.placement);
+  }
   const agent = await workspace.agents.create({
     ...(input.agentId ? { agentId: input.agentId } : {}),
     config: buildAgentConfig(bot, input.library, model, input.systemPrompt, input.plugin),

@@ -43,10 +43,22 @@ Or paste `npm:@oliexe/paseo-bots` into **Settings → Plugins → Plugin source*
 ### Bots
 
 1. Open **Bots** in Paseo's sidebar and press **New bot**. Start blank, from a role, from one of your presets, or paste a bot or team file under **Import**.
-2. Chat with it. Every chat is a thread in the bot's workspace; **Open in Paseo** in a chat's menu shows it in Paseo's own view.
+2. Chat with it. New chats default to the bot's workspace; choose **Workspace** above the message box to start one in an existing workspace. **Open in Paseo** in a chat's menu shows that conversation in Paseo's own view.
 3. Open its settings with the panel button at the top right of a chat, or **Open bot settings** in the bot's menu. **Identity** holds the name, avatar and voice, **Soul** its standing instructions, **Model** the provider and model, and **Permissions** the approval mode.
 
 Bots can do the setting up too. Ask one in a chat, for example "Create a research team of three bots with Scout as Chief of Staff", and it shows every change on one card; **Apply changes** makes them. A bot can create, edit and delete bots, teams, routines, library skills and MCP servers, and change what new bots start with. Each bot's earlier settings stay under **History** in its settings.
+
+### Workspace conversations
+
+From an open workspace, choose **Chat with a bot** in the Command Center or the new-tab menu. Pick a bot and send the first message. The conversation opens as a normal chat tab in that workspace with the bot's instructions, memory, skills and tools. It also appears in Bots. Existing conversations and routine destinations stay unchanged.
+
+The **Open conversation in workspace** button in a Bots chat's header opens that exact conversation in Paseo's normal chat view. These controls work on desktop and phones.
+
+### Stopping and reading chats
+
+**Stop agent** stays available while a local bot is running, including while you type another message. Stopping preserves the draft and pauses queued messages until you send again. It interrupts the current turn without deleting or archiving the conversation. The Paseo CLI must be available on the daemon's `PATH`; phone clients do not need it installed. For bots on another host, use **Open conversation in workspace** and Paseo's own Stop control.
+
+Scrolling up pauses automatic following immediately, including small scrolls near the bottom. Return to the bottom, press the down-arrow button, or send a message to follow new output again.
 
 ### Memory
 

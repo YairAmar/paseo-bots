@@ -11,10 +11,10 @@ import { randomSeed } from "../shared/avatar";
 import { applyDefaults, DEFAULT_BOT_DEFAULTS, DEFAULT_BOT_LIST_UI, EMPTY_LIBRARY, newBotId, newGroupId, presetFromBot, pushHistory, type Bot, type BotGroup, type BotListUi, type Library } from "../shared/bot";
 import { saveTeam, tabOf, teamTabs, withoutBot } from "../shared/groups";
 import { addImportedBots } from "../shared/library";
-import { displayTitle, startBotChat, syncBotWorkspaceTitle } from "../shared/chat";
+import { displayTitle, syncBotWorkspaceTitle } from "../shared/chat";
 import { moveKey } from "../shared/sidebar";
 import { chatTranscript } from "../shared/transcript";
-import { ensureBotHomeRpc, mountRpc, exportBotRpc, importBotRpc, importTeamRpc, systemPromptRpc } from "../shared/rpc";
+import { ensureBotHomeRpc, exportBotRpc, importBotRpc, importTeamRpc } from "../shared/rpc";
 import { botFromPreset, newBot } from "../shared/templates";
 import { AvatarTheme } from "./Avatar";
 import { botMenuEntries, chatMenuEntries, ExportDialog, NewBotDialog, RenameDialog } from "./BotDialogs";
@@ -38,7 +38,8 @@ import { newMessageId } from "./sent-attachments";
 import { BotPanel, type SectionId } from "./panel/BotPanel";
 import { useBotSettings } from "./useBotSettings";
 import { fullTimeline, useChat } from "./useChat";
-import { newUuid } from "../shared/uuid";
+import { useStartChat } from "./useStartChat";
+import { WorkspacePicker } from "./WorkspacePicker";
 import { ui, useTypeScale } from "./typography";
 
 type Colors = PluginTheme["colors"];
@@ -572,6 +573,7 @@ function BotsSurfaceContent({ theme, layout, host, navigation }: PluginSurfacePr
         onBotMenu={(anchor) => (anchor ? openBotMenu(selectedBot, anchor, "kebab") : openBotMenuFromPane(selectedBot))}
         onTogglePanel={() => setPanel({ open: !panel.open, section: panel.section })}
         onStarted={(chatId) => setSelection({ botId: selectedBot.id, chatId })}
+        onOpenInPaseo={selection.chatId && navigation?.openAgent ? () => navigation.openAgent({ agentId: selection.chatId!, serverId: selectedBot.hostId ?? localHost.id }) : undefined}
       />
     ) : (
       <Splash colors={colors} />
@@ -741,39 +743,19 @@ interface SelectedChatProps {
   onBotMenu(anchor: LayoutRectangle | null): void;
   onTogglePanel(): void;
   onStarted(chatId: string): void;
+  onOpenInPaseo?(): void;
 }
 
-function SelectedChat({ colors, bot, library, selection, localHost, panelOpen, layout, keyboardOpen, typeVersion, onBack, onBotMenu, onTogglePanel, onStarted }: SelectedChatProps) {
+function SelectedChat({ colors, bot, library, selection, localHost, panelOpen, layout, keyboardOpen, typeVersion, onBack, onBotMenu, onTogglePanel, onStarted, onOpenInPaseo }: SelectedChatProps) {
   const host = useBotHost(bot.hostId, localHost);
   const chat = useChat(host.api, selection.chatId);
   const ensureHome = useRpc(ensureBotHomeRpc);
-  const compose = useRpc(systemPromptRpc);
-  const mountServers = useRpc(mountRpc);
-  const queryClient = useQueryClient();
   const toast = useToast();
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const startChat = useStartChat(bot, library, host);
 
   const start = async (message: OutgoingMessage) => {
-    if (!host.api) throw new Error(`${host.label} is offline.`);
-    // The bot's folder holds its memory and skills even when it works elsewhere.
-    const home = await ensureHome({ botId: bot.id });
-    const placement = bot.cwd ? { path: bot.cwd, projectRoot: null } : { path: home.path, projectRoot: home.root };
-    const { systemPrompt } = await compose({ bot, local: host.isLocal, message: message.text });
-    // The plugin's tools and connected apps go through this host's relay, so only bots here get them.
-    const agentId = newUuid();
-    const plugin = host.isLocal ? await mountServers({ botId: bot.id, agentId }) : {};
-    const id = await startBotChat(host.api, {
-      bot,
-      library,
-      ...(host.isLocal ? { agentId } : {}),
-      plugin,
-      placement,
-      prompt: message.text,
-      systemPrompt,
-      images: message.images,
-      attachments: message.attachments,
-      clientMessageId: message.messageId,
-    });
-    await queryClient.invalidateQueries({ queryKey: ["paseo-bots", "chats", host.key, bot.id] });
+    const id = await startChat(message, workspaceId ?? undefined);
     onStarted(id);
   };
 
@@ -815,6 +797,8 @@ function SelectedChat({ colors, bot, library, selection, localHost, panelOpen, l
       onTogglePanel={onTogglePanel}
       onStart={start}
       onOpenChat={onStarted}
+      onOpenInPaseo={onOpenInPaseo}
+      composerHeader={selection.chatId === null ? <WorkspacePicker host={host} botName={bot.name} value={workspaceId} onChange={setWorkspaceId} /> : undefined}
     />
   );
 }

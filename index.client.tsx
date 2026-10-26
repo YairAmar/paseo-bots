@@ -1,6 +1,7 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { z } from "zod";
 import { BotsSurface } from "./client/BotsSurface";
+import { WorkspaceChat } from "./client/WorkspaceChat";
 import { NativeConnectCard } from "./client/chat/stream/ConnectCard";
 import { ProposalCard } from "./client/chat/stream/ProposalCard";
 import { RoutineRunCard } from "./client/chat/stream/RoutineRunCard";
@@ -20,6 +21,15 @@ export default function contribute(client: PluginClientContext) {
   client.addSurface("bots", BotsSurface);
   client.addSidebarItem({ id: "bots", title: "Bots", icon: "Bot", surface: "bots" });
   client.addSettingsScreen({ id: "bots", title: "Bots", icon: "Bot", Component: BotsSettings });
+  client.addWorkspacePanel({ id: "chat-with-bot", title: "Chat with a bot", icon: "Bot", context: "workspace", locations: ["workspace"], Component: WorkspaceChat });
+  client.addCommandCenterItem({
+    id: "chat-with-bot",
+    title: "Chat with a bot",
+    icon: "Bot",
+    context: "workspace",
+    keywords: ["bot", "conversation", "workspace"],
+    onSelect({ openPanel }) { openPanel("chat-with-bot"); },
+  });
   client.addCommandCenterItem({
     id: "open-bots",
     title: "Open Bots",
